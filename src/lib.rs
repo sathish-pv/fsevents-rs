@@ -1,41 +1,18 @@
-// mod fsevents;
 #[macro_use]
 extern crate napi_derive;
 
-use std::ffi::{c_char, c_void, CStr};
-use std::ptr;
+use std::ffi::{CStr, c_char, c_void};
+use std::{ptr, thread};
 
 use fsevent_sys as fs;
 use fsevent_sys::{core_foundation as cf, *};
-use napi::bindgen_prelude::*;
-use napi::threadsafe_function::{
-    ErrorStrategy, ThreadSafeCallContext, ThreadsafeFunction, ThreadsafeFunctionCallMode,
-};
-use napi::*;
-
-#[derive(Debug, Clone)]
-pub struct FseEnvironment {
-    pub runloop: Option<cf::CFRunLoopRef>,
-}
-
-fn fse_environment_create() -> External<FseEnvironment> {
-    External::new(FseEnvironment { runloop: None })
-}
+use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::{CallContext, JsNumber, JsObject, JsString, bindgen_prelude::*};
 
 struct FseInstance {
-    path: String,
-    // fseenv: FseEnvironment,
-    // stream: Option<fs::FSEventStreamRef>,
-    tsfn: Option<ThreadsafeFunction<Event>>,
-}
-
-use std::fmt::Debug;
-impl Debug for FseInstance {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FseInstance")
-            .field("path", &self.path)
-            .finish()
-    }
+    runloop: Option<cf::CFRunLoopRef>,
+    callback: Option<ThreadsafeFunction<Event, ErrorStrategy::CalleeHandled>>,
+    handle: Option<thread::JoinHandle<Result<()>>>,
 }
 
 #[napi]
@@ -45,8 +22,8 @@ pub struct Event {
     pub flag: u32,
     pub path: String,
 }
-fn default_stream_context(instance: FseInstance) -> fs::FSEventStreamContext {
-    let instance = &instance as *const FseInstance;
+fn default_stream_context(instance: &ThreadsafeFunction<Event>) -> fs::FSEventStreamContext {
+    let instance = instance as *const ThreadsafeFunction<Event>;
     fs::FSEventStreamContext {
         version: 0,
         info: instance as *mut c_void,
@@ -66,59 +43,33 @@ extern "C" fn callback(
 ) {
     unsafe {
         let event_paths = event_paths as *const *const c_char;
-        let instance = info as *mut FseInstance;
+        let callback = info as *mut ThreadsafeFunction<Event>;
 
         for pos in 0..num_events {
-            let path = CStr::from_ptr(*event_paths.add(pos))
+            let path = CStr::from_ptr(*event_paths)
                 .to_str()
                 .expect("Invalid UTF8 string.");
             let flag = *event_flags.add(pos);
-            let event_id: i64 = *event_ids.add(pos) as _;
+            let event_id = *event_ids.add(pos);
 
             let event = Event {
-                event_id,
+                event_id: event_id.try_into().unwrap(),
                 flag,
                 path: path.to_string(),
             };
 
-            let js_callback = (*instance).tsfn.as_ref().unwrap();
+            dbg!("Calling JS callback: {:?}", &event);
+
+            let js_callback = callback.as_ref().unwrap();
+
             let status = js_callback.call(Ok(event), ThreadsafeFunctionCallMode::Blocking);
-            println!("Error calling JS callback: {:?}", status);
+
+            assert_eq!(status, Status::Ok, "Error calling JS callback");
         }
     }
 }
 
-#[js_function(1)]
-fn fse_stop(args: CallContext) -> Result<()> {
-    let instance = args.get::<External<FseEnvironment>>(0)?;
-    // let instance = instance.as_ref();
-    // let runloop = instance.runloop.take().unwrap();
-    let runl = instance.as_ref().runloop;
-    if let Some(runl) = runl {
-        unsafe {
-            fs::FSEventStreamStop(runl);
-            cf::CFRunLoopStop(runl);
-        }
-    }
-    Ok(())
-}
 unsafe impl Send for FseInstance {}
-
-fn fse_dispatch_event(ctx: ThreadSafeCallContext<Event>) -> Result<Vec<*mut sys::napi_value__>> {
-    let env = ctx.env;
-    let event = ctx.value;
-    let event_id = event.event_id;
-    let flag = event.flag;
-    let path = event.path;
-    let args = (
-        env.create_string(&path).unwrap(),
-        env.create_uint32(flag).unwrap(),
-        env.create_int64(event_id).unwrap(),
-    );
-    let args = args.into_vec(env.raw()).unwrap();
-
-    Ok(args)
-}
 
 fn build_native_paths(path: &str) -> Result<cf::CFMutableArrayRef> {
     let native_paths =
@@ -155,88 +106,123 @@ fn build_native_paths(path: &str) -> Result<cf::CFMutableArrayRef> {
     }
 }
 
-#[js_function(4)]
-fn fse_start(args: CallContext) -> Result<External<FseEnvironment>> {
-    let fseenv = args.get::<External<FseEnvironment>>(0)?;
-    let path = args.get::<JsString>(1)?.into_utf8()?.as_str()?.to_string();
-    // let since = args.get::<JsNumber>(2)?.get_double()? as i64;
-    let callback_js = args.get::<JsFunction>(3)?;
+#[js_function(3)]
+fn fse_start(args: CallContext) -> Result<External<FseInstance>> {
+    let path = args.get::<JsString>(0)?.into_utf8()?.as_str()?.to_string();
+    let since = args.get::<JsNumber>(1)?.get_double()? as i64;
+    let callback_js = args.get::<JsFunction>(2)?;
 
-    let tsfn: ThreadsafeFunction<Event, ErrorStrategy::CalleeHandled> =
-        callback_js.create_threadsafe_function(0, fse_dispatch_event)?;
+    let mut tsfn: ThreadsafeFunction<Event, ErrorStrategy::CalleeHandled> = callback_js
+        .create_threadsafe_function(0, |ctx| {
+            let env = ctx.env;
+            let event: Event = ctx.value;
+            let event_id = event.event_id;
+            let flag = event.flag;
+            let path = event.path;
+            let args = (
+                env.create_string(&path).unwrap(),
+                env.create_uint32(flag).unwrap(),
+                env.create_int64(event_id).unwrap(),
+            );
+            let args = args.into_vec(env.raw()).unwrap();
+            Ok(args)
+        })?;
 
-    let instance = FseInstance {
-        path: path.clone(),
-        tsfn: Some(tsfn),
-        // fseenv: fseenv.clone(),
-        // stream: None,
+    tsfn.refer(args.env)?;
+
+    let tscallback = tsfn.clone();
+    let mut instance = FseInstance {
+        callback: Some(tsfn),
+        runloop: None,
+
+        handle: None,
     };
 
-    // let (ret_tx, ret_rx) = std::sync::mpsc::channel();
+    let (ret_tx, ret_rx) = std::sync::mpsc::channel();
+    struct CFRunLoopSendWrapper(cf::CFRunLoopRef);
 
-    std::thread::spawn(move || -> Result<()> {
+    unsafe impl Send for CFRunLoopSendWrapper {}
+
+    let handle = thread::Builder::new()
+        .name("c eventloop".to_owned())
+        .spawn(move || -> Result<()> {
+            unsafe {
+                let stream_context = default_stream_context(&tscallback);
+                let paths = build_native_paths(&path)?;
+
+                let stream = fs::FSEventStreamCreate(
+                    cf::kCFAllocatorDefault,
+                    callback,
+                    &stream_context,
+                    paths,
+                    fs::kFSEventStreamEventIdSinceNow,
+                    since as cf::CFAbsoluteTime,
+                    kFSEventStreamCreateFlagNone
+                        | kFSEventStreamCreateFlagWatchRoot
+                        | kFSEventStreamCreateFlagFileEvents,
+                );
+
+                let runloop = CFRunLoopSendWrapper(cf::CFRunLoopGetCurrent());
+                ret_tx.send(runloop).expect("unabe to send CFRunLoopRef");
+
+                fs::FSEventStreamScheduleWithRunLoop(
+                    stream,
+                    cf::CFRunLoopGetCurrent(),
+                    cf::kCFRunLoopDefaultMode,
+                );
+
+                fs::FSEventStreamStart(stream);
+                cf::CFRunLoopRun();
+                dbg!("CFRunLoopRun finished");
+
+                fs::FSEventStreamFlushSync(stream);
+                fs::FSEventStreamStop(stream);
+                Ok(())
+            }
+        })
+        .unwrap();
+
+    instance.runloop = Some(ret_rx.recv().unwrap().0);
+    instance.handle = Some(handle);
+
+    Ok(instance.into())
+}
+
+#[js_function(1)]
+fn fse_stop(args: CallContext) -> Result<()> {
+    let mut instance = args.get::<External<FseInstance>>(0)?;
+
+    if let Some(mut callback) = instance.callback.take() {
+        callback.unref(args.env)?;
+        callback.abort()?;
+    }
+
+    if let Some(handle) = instance.handle.take() {
+        dbg!("Stopping thread");
         unsafe {
-            let paths = build_native_paths(&path)?;
-            let stream_context = default_stream_context(instance);
-
-            let stream = fs::FSEventStreamCreate(
-                cf::kCFAllocatorDefault,
-                callback,
-                &stream_context,
-                paths,
-                fs::kFSEventStreamEventIdSinceNow,
-                0.1 as cf::CFAbsoluteTime,
-                kFSEventStreamCreateFlagNone
-                    | kFSEventStreamCreateFlagWatchRoot
-                    | kFSEventStreamCreateFlagFileEvents
-                    | kFSEventStreamCreateFlagUseCFTypes,
-            );
-
-            // instance.stream = Some(stream);
-            // let runloop = CFRunLoopSendWrapper(cf::CFRunLoopGetCurrent());
-            /* ret_tx
-                           .send(runloop)
-                           .expect("unabe to send CFRunLoopRef");
-            */
-            fs::FSEventStreamScheduleWithRunLoop(
-                stream,
-                cf::CFRunLoopGetCurrent(),
-                cf::kCFRunLoopDefaultMode,
-            );
-
-            fs::FSEventStreamStart(stream);
-            cf::CFRunLoopRun();
-
-            fs::FSEventStreamFlushSync(stream);
-            fs::FSEventStreamStop(stream);
-            Ok(())
+            cf::CFRunLoopStop(instance.runloop.unwrap());
         }
-    });
+        handle.join().unwrap()?;
+    }
 
-    // instance.run = Some(ret_rx.recv().unwrap().0);
-
-    // let env = External::new(fseenv);
-
-    Ok(fseenv)
+    Ok(())
 }
 
 fn fse_flags(env: Env) -> Result<JsObject> {
-    let mut flags = env.create_object().unwrap();
+    let mut flags = env.create_object()?;
 
-    let since_now = env
-        .create_int64(kFSEventStreamEventIdSinceNow as _)
-        .unwrap();
+    let since_now = env.create_int64(kFSEventStreamEventIdSinceNow as _)?;
 
     flags.set_named_property("sinceNow", since_now)?;
     Ok(flags)
 }
 
 fn fse_constants(env: Env) -> Result<JsObject> {
-    let mut constants = env.create_object().unwrap();
+    let mut constants = env.create_object()?;
 
     macro_rules! create_constant {
         ($name:ident) => {
-            let constant = env.create_uint32($name as _).unwrap();
+            let constant = env.create_uint32($name as _)?;
             constants.set_named_property(stringify!($name), constant)?;
         };
     }
@@ -269,12 +255,11 @@ fn fse_constants(env: Env) -> Result<JsObject> {
 }
 
 #[module_exports]
-fn init(mut exports: JsObject, env: Env) -> Result<()> {
-    exports.set_named_property("globals", fse_environment_create())?;
-    exports.set_named_property("flags", fse_flags(env))?;
-    exports.set_named_property("constants", fse_constants(env))?;
+pub fn init(mut exports: JsObject, env: Env) -> Result<()> {
     exports.create_named_method("start", fse_start)?;
-    exports.create_named_method("start", fse_stop)?;
+    exports.create_named_method("stop", fse_stop)?;
+    exports.set_named_property("constants", fse_constants(env))?;
+    exports.set_named_property("flags", fse_flags(env))?;
 
     Ok(())
 }

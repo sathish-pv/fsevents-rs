@@ -1,8 +1,13 @@
 
 
-const { globals, flags, constants, start } = require('./index.node')
-console.log(globals, flags, constants);
+const { watch, getInfo } = require('./fsevents-rs.js');
 
-let instance = start('asd',() => {});
-console.log(instance);
+let stop = watch(__dirname, (path, flags) => {
+  const info = getInfo(path, flags);
+  console.log(info);
+});
 
+setTimeout(() => {
+  console.log('Stopping');
+  stop();
+}, 10000);
