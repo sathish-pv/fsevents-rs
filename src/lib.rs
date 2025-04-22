@@ -58,8 +58,6 @@ extern "C" fn callback(
                 path: path.to_string(),
             };
 
-            dbg!("Calling JS callback: {:?}", &event);
-
             let js_callback = callback.as_ref().unwrap();
 
             let status = js_callback.call(Ok(event), ThreadsafeFunctionCallMode::Blocking);
@@ -112,7 +110,7 @@ fn fse_start(args: CallContext) -> Result<External<FseInstance>> {
     let since = args.get::<JsNumber>(1)?.get_double()? as i64;
     let callback_js = args.get::<JsFunction>(2)?;
 
-    let mut tsfn: ThreadsafeFunction<Event, ErrorStrategy::CalleeHandled> = callback_js
+    let mut tsfn = callback_js
         .create_threadsafe_function(0, |ctx| {
             let env = ctx.env;
             let event: Event = ctx.value;
@@ -219,38 +217,40 @@ fn fse_flags(env: Env) -> Result<JsObject> {
 
 fn fse_constants(env: Env) -> Result<JsObject> {
     let mut constants = env.create_object()?;
-
+    use paste::paste;
     macro_rules! create_constant {
         ($name:ident) => {
-            let constant = env.create_uint32($name as _)?;
-            constants.set_named_property(stringify!($name), constant)?;
+            paste! {
+                let constant = env.create_uint32([<kFSEventStreamEventFlag $name>] as _)?;
+                constants.set_named_property(stringify!($name), constant)?;
+            }
         };
     }
 
-    create_constant!(kFSEventStreamEventFlagNone);
-    create_constant!(kFSEventStreamEventFlagMustScanSubDirs);
-    create_constant!(kFSEventStreamEventFlagUserDropped);
-    create_constant!(kFSEventStreamEventFlagKernelDropped);
-    create_constant!(kFSEventStreamEventFlagEventIdsWrapped);
-    create_constant!(kFSEventStreamEventFlagHistoryDone);
-    create_constant!(kFSEventStreamEventFlagRootChanged);
-    create_constant!(kFSEventStreamEventFlagMount);
-    create_constant!(kFSEventStreamEventFlagUnmount);
-    create_constant!(kFSEventStreamEventFlagItemCreated);
-    create_constant!(kFSEventStreamEventFlagItemRemoved);
-    create_constant!(kFSEventStreamEventFlagItemInodeMetaMod);
-    create_constant!(kFSEventStreamEventFlagItemRenamed);
-    create_constant!(kFSEventStreamEventFlagItemModified);
-    create_constant!(kFSEventStreamEventFlagItemFinderInfoMod);
-    create_constant!(kFSEventStreamEventFlagItemChangeOwner);
-    create_constant!(kFSEventStreamEventFlagItemXattrMod);
-    create_constant!(kFSEventStreamEventFlagItemIsFile);
-    create_constant!(kFSEventStreamEventFlagItemIsDir);
-    create_constant!(kFSEventStreamEventFlagItemIsSymlink);
-    create_constant!(kFSEventStreamEventFlagItemIsHardlink);
-    create_constant!(kFSEventStreamEventFlagItemIsLastHardlink);
-    create_constant!(kFSEventStreamEventFlagOwnEvent);
-    create_constant!(kFSEventStreamEventFlagItemCloned);
+    create_constant!(None);
+    create_constant!(MustScanSubDirs);
+    create_constant!(UserDropped);
+    create_constant!(KernelDropped);
+    create_constant!(EventIdsWrapped);
+    create_constant!(HistoryDone);
+    create_constant!(RootChanged);
+    create_constant!(Mount);
+    create_constant!(Unmount);
+    create_constant!(ItemCreated);
+    create_constant!(ItemRemoved);
+    create_constant!(ItemInodeMetaMod);
+    create_constant!(ItemRenamed);
+    create_constant!(ItemModified);
+    create_constant!(ItemFinderInfoMod);
+    create_constant!(ItemChangeOwner);
+    create_constant!(ItemXattrMod);
+    create_constant!(ItemIsFile);
+    create_constant!(ItemIsDir);
+    create_constant!(ItemIsSymlink);
+    create_constant!(ItemIsHardlink);
+    create_constant!(ItemIsLastHardlink);
+    create_constant!(OwnEvent);
+    create_constant!(ItemCloned);
     Ok(constants)
 }
 
