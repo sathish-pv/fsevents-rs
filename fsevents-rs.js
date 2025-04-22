@@ -40,6 +40,7 @@ function watch(path, since, handler) {
 }
 
 function getInfo(path, flags) {
+
   return {
     path,
     flags,
@@ -50,10 +51,11 @@ function getInfo(path, flags) {
 }
 
 function getFileType(flags) {
-  if (events.kFSEventStreamEventFlagItemIsFile & flags) return "file";
-  if (events.kFSEventStreamEventFlagItemIsDir & flags) return "directory";
-  if (events.kFSEventStreamEventFlagMustScanSubDirs & flags) return "directory"; 
-  if (events.kFSEventStreamEventFlagItemIsSymlink & flags) return "symlink";
+  
+  if (events.ItemIsFile & flags) return "file";
+  if (events.ItemIsDir & flags) return "directory";
+  if (events.MustScanSubDirs & flags) return "directory"; 
+  if (events.ItemIsSymlink & flags) return "symlink";
 }
 function anyIsTrue(obj) {
   for (let key in obj) {
@@ -62,21 +64,21 @@ function anyIsTrue(obj) {
   return false;
 }
 function getEventType(flags) {
-  if (events.kFSEventStreamEventFlagItemRemoved & flags) return "deleted";
-  if (events.kFSEventStreamEventFlagItemRenamed & flags) return "moved";
-  if (events.kFSEventStreamEventFlagItemCreated & flags) return "created";
-  if (events.kFSEventStreamEventFlagItemModified & flags) return "modified";
-  if (events.kFSEventStreamEventFlagRootChanged & flags) return "root-changed";
-  if (events.kFSEventStreamEventFlagItemCloned & flags) return "cloned";
+  if (events.ItemRemoved & flags) return "deleted";
+  if (events.ItemRenamed & flags) return "moved";
+  if (events.ItemCreated & flags) return "created";
+  if (events.ItemModified & flags) return "modified";
+  if (events.RootChanged & flags) return "root-changed";
+  if (events.ItemCloned & flags) return "cloned";
   if (anyIsTrue(flags)) return "modified";
   return "unknown";
 }
 function getFileChanges(flags) {
   return {
-    inode: !!(events.kFSEventStreamEventFlagItemInodeMetaMod & flags),
-    finder: !!(events.kFSEventStreamEventFlagItemFinderInfoMod & flags),
-    access: !!(events.kFSEventStreamEventFlagItemChangeOwner & flags),
-    xattrs: !!(events.kFSEventStreamEventFlagItemXattrMod & flags),
+    inode: !!(events.ItemInodeMetaMod & flags),
+    finder: !!(events.ItemFinderInfoMod & flags),
+    access: !!(events.ItemChangeOwner & flags),
+    xattrs: !!(events.ItemXattrMod & flags),
   };
 }
 
