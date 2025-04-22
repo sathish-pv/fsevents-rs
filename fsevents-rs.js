@@ -1,16 +1,10 @@
-/*
- ** © 2020 by Philipp Dunkel, Ben Noordhuis, Elan Shankar, Paul Miller
- ** Licensed under MIT License.
- */
-
-/* jshint node:true */
 "use strict";
 
 if (process.platform !== "darwin") {
   throw new Error(`Module 'fsevents' is not compatible with platform '${process.platform}'`);
 }
 
-const Native = require("./index.node");
+const Native = require("./fsevents-rs.node");
 const events = Native.constants;
 
 

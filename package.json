@@ -1,8 +1,39 @@
 {
+  "description": "Native Access to MacOS FSEvents",
+  "main": "fsevents.js",
+  "types": "fsevents.d.ts",
   "name": "fsevents-rs",
-  "version": "1.0.0",
-  "main": "index.js",
+  "version": "1.0.0.alpha.1",
   "author": "sathish.pc <sathish.pc@zohocorp.com>",
-  "license": "MIT"
+  "os": [
+    "darwin"
+  ],
+  "files": [
+    "fsevents-rs.d.ts",
+    "fsevents-rs.js",
+    "fsevents-rs.node"
+  ],
+  "engines": {
+    "node": ">=11.0.0"
+  },
+  "napi": {
+    "name": "fsevents-rs",
+    "npmClient": "yarn"
+  },
+  "scripts": {
+    "build": "napi build --release",
+    "prepublishOnly": "yarn build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sathish-pv/fsevents-rs.git"
+  },
+  "keywords": [
+    "fsevents",
+    "rust",
+    "mac"
+  ],
+  "license": "MIT",
 
+  "homepage": "https://github.com/sathish-pv/fsevents-rs"
 }
